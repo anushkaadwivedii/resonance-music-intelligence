@@ -42,6 +42,7 @@ class SignalWeights(BaseModel):
 
 class Intent(BaseModel):
     search_description: str | None = None
+    lyrics_search_description: str | None = None
     desired_lyrical_themes: list[str] = []
     avoid_lyrical_themes: list[str] = []
     lyrics_required: bool = False

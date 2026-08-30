@@ -77,7 +77,8 @@ def lyrics_query_text(intent: Intent) -> str | None:
     """Represent requested lyrical subject matter separately from sound."""
     if not intent.desired_lyrical_themes:
         return None
-    return "Lyrical themes, story, and emotional meaning: " + ", ".join(intent.desired_lyrical_themes)
+    lyrical_meaning = intent.lyrics_search_description or ", ".join(intent.desired_lyrical_themes)
+    return "Lyrical themes, story, and emotional meaning: " + lyrical_meaning
 
 
 def explicit_title_request(query: str) -> str | None:

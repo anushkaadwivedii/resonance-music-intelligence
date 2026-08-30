@@ -23,6 +23,7 @@ export type Song = {
 
 export type Intent = {
   search_description: string | null;
+  lyrics_search_description: string | null;
   desired_lyrical_themes: string[];
   avoid_lyrical_themes: string[];
   lyrics_required: boolean;

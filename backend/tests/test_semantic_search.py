@@ -1,5 +1,8 @@
+import pytest
+
 from backend.app.embeddings import EmbeddingBatch
 from backend.app.models import Song
+from backend.app.repository import blended_lyrics_similarity
 from backend.app.retrieval import HybridRetriever, lyrics_query_text
 from backend.scripts.search_songs import SemanticSearchResult, format_result
 
@@ -26,6 +29,7 @@ class LyricsRequiredIntentParser:
         from backend.app.models import Intent, SignalWeights
         return Intent(
             search_description="gentle reflective vocal music",
+            lyrics_search_description="forgiving someone and offering them a second chance",
             desired_lyrical_themes=["forgiveness"],
             lyrics_required=True,
             signal_weights=SignalWeights(semantic=0.5, lyrics=1.0),
@@ -229,6 +233,19 @@ def test_lyrics_query_is_separate_from_sound_query():
     assert "second chances" in text
 
 
+def test_lyrics_query_preserves_detailed_narrative_over_generic_tags():
+    from backend.app.models import Intent
+
+    text = lyrics_query_text(Intent(
+        lyrics_search_description="longing for someone who is now with somebody else",
+        desired_lyrical_themes=["longing", "heartbreak"],
+        lyrics_required=True,
+    ))
+
+    assert text is not None
+    assert "now with somebody else" in text
+
+
 def test_explicit_lyrics_request_excludes_unknown_lyrics(monkeypatch):
     monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
     retriever = HybridRetriever(
@@ -272,3 +289,11 @@ def test_explicit_lyrics_request_rejects_weak_nearest_neighbors(monkeypatch):
     _, results = retriever.recommend("songs about forgiveness", limit=5)
 
     assert results == []
+
+
+def test_chunk_similarity_is_tempered_by_whole_song_meaning(monkeypatch):
+    monkeypatch.setenv("LYRICS_CHUNK_WEIGHT", "0.65")
+
+    score = blended_lyrics_similarity(chunk_similarity=0.70, whole_song_similarity=0.30)
+
+    assert score == pytest.approx(0.56)

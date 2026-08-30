@@ -11,8 +11,14 @@ from typing import Protocol
 from sqlalchemy import and_, func, or_, select, text
 
 from .database import database_session
-from .db_models import SongRecord
-from .embeddings import EMBEDDING_TEXT_VERSION, SOUND_EMBEDDING_TEXT_VERSION, configured_embedding_model
+from .db_models import LyricsChunkRecord, SongRecord
+from .embeddings import (
+    EMBEDDING_TEXT_VERSION,
+    LYRICS_CHUNK_EMBEDDING_TEXT_VERSION,
+    LYRICS_EMBEDDING_TEXT_VERSION,
+    SOUND_EMBEDDING_TEXT_VERSION,
+    configured_embedding_model,
+)
 from .models import Intent, Song
 
 
@@ -29,6 +35,20 @@ class SongRepository(Protocol):
 
 
 ACCENTS = ["#8b7cff", "#d09a6a", "#61af93", "#e7a1a4", "#4c79d8", "#b98a5f", "#977ac0"]
+
+
+def lyrics_chunk_weight() -> float:
+    """Balance local passage relevance with the song's overall lyrical meaning."""
+    try:
+        configured = float(os.getenv("LYRICS_CHUNK_WEIGHT", "0.65"))
+    except ValueError:
+        configured = 0.65
+    return max(0.0, min(1.0, configured))
+
+
+def blended_lyrics_similarity(chunk_similarity: float, whole_song_similarity: float) -> float:
+    chunk_weight = lyrics_chunk_weight()
+    return chunk_weight * chunk_similarity + (1 - chunk_weight) * whole_song_similarity
 
 
 def accent_for(source_id: str) -> str:
@@ -140,7 +160,8 @@ class PostgresSongRepository:
         self, lyrics_vector: list[float], sound_vector: list[float], limit: int
     ) -> list[tuple[Song, float, float]]:
         """Retrieve experimental lyrical meaning while retaining sound evidence."""
-        from .embeddings import LYRICS_EMBEDDING_TEXT_VERSION
+        if os.getenv("USE_LYRICS_CHUNKS", "false").lower() == "true":
+            return self._search_by_lyrics_chunks(lyrics_vector, sound_vector, limit)
 
         sound_column, sound_model_column, sound_version_column, sound_version = self._embedding_columns()
         lyrics_distance = SongRecord.lyrics_embedding.cosine_distance(lyrics_vector).label("lyrics_distance")
@@ -169,6 +190,55 @@ class PostgresSongRepository:
                 )
                 for record, row_lyrics_distance, row_sound_distance in rows
             ]
+
+    def _search_by_lyrics_chunks(
+        self, lyrics_vector: list[float], sound_vector: list[float], limit: int
+    ) -> list[tuple[Song, float, float]]:
+        """Return each song's strongest passage match, once per recording."""
+        sound_column, sound_model_column, sound_version_column, sound_version = self._embedding_columns()
+        lyrics_distance = LyricsChunkRecord.embedding.cosine_distance(lyrics_vector).label("lyrics_distance")
+        whole_lyrics_distance = SongRecord.lyrics_embedding.cosine_distance(lyrics_vector).label(
+            "whole_lyrics_distance"
+        )
+        sound_distance = sound_column.cosine_distance(sound_vector).label("sound_distance")
+        statement = (
+            select(SongRecord, lyrics_distance, whole_lyrics_distance, sound_distance)
+            .join(LyricsChunkRecord, LyricsChunkRecord.song_id == SongRecord.id)
+            .where(
+                LyricsChunkRecord.embedding_model == configured_embedding_model(),
+                LyricsChunkRecord.embedding_version == LYRICS_CHUNK_EMBEDDING_TEXT_VERSION,
+                SongRecord.lyrics_embedding.is_not(None),
+                SongRecord.lyrics_embedding_model == configured_embedding_model(),
+                SongRecord.lyrics_embedding_version == LYRICS_EMBEDDING_TEXT_VERSION,
+                sound_column.is_not(None),
+                sound_model_column == configured_embedding_model(),
+                sound_version_column == sound_version,
+            )
+            .order_by(lyrics_distance)
+            # Fetch extra passages because several top passages may belong to
+            # the same song; Python then keeps only its strongest one.
+            .limit(max(limit * 4, limit))
+        )
+        with database_session() as session:
+            session.execute(text("SET LOCAL hnsw.ef_search = 200"))
+            rows = session.execute(statement).all()
+
+        results: list[tuple[Song, float, float]] = []
+        seen_song_ids: set[int] = set()
+        for record, row_lyrics_distance, row_whole_lyrics_distance, row_sound_distance in rows:
+            if record.id in seen_song_ids:
+                continue
+            seen_song_ids.add(record.id)
+            chunk_similarity = 1.0 - float(row_lyrics_distance)
+            whole_song_similarity = 1.0 - float(row_whole_lyrics_distance)
+            results.append((
+                self._to_song(record),
+                blended_lyrics_similarity(chunk_similarity, whole_song_similarity),
+                1.0 - float(row_sound_distance),
+            ))
+            if len(results) == limit:
+                break
+        return results
 
     @staticmethod
     def _to_song(record: SongRecord) -> Song:

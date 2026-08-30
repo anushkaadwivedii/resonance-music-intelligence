@@ -24,6 +24,7 @@ LLM_PRICES_PER_MILLION_TOKENS = {
 
 class ExtractedIntent(BaseModel):
     search_description: str = Field(min_length=3, max_length=500)
+    lyrics_search_description: str | None = Field(default=None, min_length=3, max_length=500)
     desired_lyrical_themes: list[str]
     avoid_lyrical_themes: list[str]
     lyrics_required: bool
@@ -70,6 +71,11 @@ class OpenAIIntentParser:
                 "search_description that expresses the desired SOUND without relying on matching words "
                 "in song titles or artist names. Separately extract desired_lyrical_themes and "
                 "avoid_lyrical_themes; these describe what the words of the song should or should not be about. "
+                "When lyrical content is explicitly requested, write lyrics_search_description as a detailed, "
+                "meaning-preserving description of the requested lyrical story. Preserve relationships and "
+                "perspective—for example, 'longing for someone who is now with somebody else'—rather than "
+                "reducing it to generic tags. Exclude production, genre, tempo, and other sound instructions. "
+                "Otherwise set lyrics_search_description to null. "
                 "Set lyrics_required true only when lyrical content is an explicit requirement, such as "
                 "'songs about forgiveness', 'lyrics about home', or 'without childish lyrics'. Do not require "
                 "lyrics for ordinary sound or mood requests such as 'happy music'. "
