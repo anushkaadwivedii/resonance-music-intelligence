@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.tsbuildinfo
+.DS_Store
+.env
+data/raw/*
+!data/raw/.gitkeep
+data/resonance.db
