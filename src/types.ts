@@ -24,6 +24,7 @@ export type Intent = {
   search_description: string | null;
   desired_lyrical_themes: string[];
   avoid_lyrical_themes: string[];
+  lyrics_required: boolean;
   avoid_sound: string[];
   signal_weights: {
     semantic: number;

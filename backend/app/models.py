@@ -41,6 +41,7 @@ class Intent(BaseModel):
     search_description: str | None = None
     desired_lyrical_themes: list[str] = []
     avoid_lyrical_themes: list[str] = []
+    lyrics_required: bool = False
     avoid_sound: list[str] = []
     signal_weights: SignalWeights = Field(default_factory=SignalWeights)
     moods: list[str] = []

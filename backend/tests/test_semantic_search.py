@@ -21,6 +21,17 @@ class FakeIntentParser:
         )
 
 
+class LyricsRequiredIntentParser:
+    def parse(self, query: str):
+        from backend.app.models import Intent, SignalWeights
+        return Intent(
+            search_description="gentle reflective vocal music",
+            desired_lyrical_themes=["forgiveness"],
+            lyrics_required=True,
+            signal_weights=SignalWeights(semantic=0.5, lyrics=1.0),
+        )
+
+
 class FakeVectorRepository:
     def __init__(self) -> None:
         self.song = Song(
@@ -52,6 +63,23 @@ class FakeVectorRepository:
     def search_by_metadata(self, query_vector, intent, limit):
         self.metadata_intent = intent
         return []
+
+    def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        return []
+
+
+class FakeLyricsRepository(FakeVectorRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lyric_song = self.song.model_copy(update={
+            "id": "lyrics", "title": "Second Chances", "artist": "Words Artist",
+        })
+
+    def search_by_vector(self, query_vector, limit):
+        return [(self.song, 0.85), (self.lyric_song, 0.75)]
+
+    def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        return [(self.lyric_song, 0.8, 0.75)]
 
 
 def test_format_result_shows_explanation_fields():
@@ -179,3 +207,18 @@ def test_lyrics_query_is_separate_from_sound_query():
     assert text is not None
     assert "forgiveness" in text
     assert "second chances" in text
+
+
+def test_explicit_lyrics_request_excludes_unknown_lyrics(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    retriever = HybridRetriever(
+        FakeLyricsRepository(),
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+    )
+
+    intent, results = retriever.recommend("songs about forgiveness", limit=5)
+
+    assert intent.lyrics_required is True
+    assert [item.song.id for item in results] == ["lyrics"]
+    assert results[0].breakdown.lyrics == 80

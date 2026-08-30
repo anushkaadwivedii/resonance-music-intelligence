@@ -32,7 +32,7 @@ const initialResponse: RecommendationResponse = {
   query: "",
   summary: "Tell me where you are, how you feel, or what you want the next hour to sound like.",
   intent: {
-    search_description: null, desired_lyrical_themes: [], avoid_lyrical_themes: [], avoid_sound: [],
+    search_description: null, desired_lyrical_themes: [], avoid_lyrical_themes: [], lyrics_required: false, avoid_sound: [],
     signal_weights: { semantic: 1, mood: 1, audio: 1, context: 1, tempo: 1, genre: 1, artist: 1, lyrics: 1, popularity_tiebreak: 0.04 },
     moods: [], genres: [], contexts: [], excluded_genres: [], title_contains: null,
     artist_reference: null, bpm_min: null, bpm_max: null, bpm_is_explicit: false,

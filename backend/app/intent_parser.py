@@ -26,6 +26,7 @@ class ExtractedIntent(BaseModel):
     search_description: str = Field(min_length=3, max_length=500)
     desired_lyrical_themes: list[str]
     avoid_lyrical_themes: list[str]
+    lyrics_required: bool
     avoid_sound: list[str]
     signal_weights: SignalWeights
     moods: list[Literal[
@@ -69,6 +70,9 @@ class OpenAIIntentParser:
                 "search_description that expresses the desired SOUND without relying on matching words "
                 "in song titles or artist names. Separately extract desired_lyrical_themes and "
                 "avoid_lyrical_themes; these describe what the words of the song should or should not be about. "
+                "Set lyrics_required true only when lyrical content is an explicit requirement, such as "
+                "'songs about forgiveness', 'lyrics about home', or 'without childish lyrics'. Do not require "
+                "lyrics for ordinary sound or mood requests such as 'happy music'. "
                 "Put unwanted sonic qualities in avoid_sound. Set title_contains ONLY when the user explicitly "
                 "asks for a word or phrase in the song title (for example, 'songs with happy in the title'). "
                 "Do not infer title_contains from an ordinary mood request like 'happy songs'. Set "

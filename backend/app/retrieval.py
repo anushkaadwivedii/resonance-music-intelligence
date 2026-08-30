@@ -267,6 +267,9 @@ class HybridRetriever:
             artist = 1.0 if intent.artist_reference and song.artist == intent.artist_reference else 0.0
             audio = self._audio_profile_score(intent, song)
             popularity = self._popularity_score(song)
+            lyrics_available = song.id in lyrics_scores
+            if lyrics_channel_active and intent.lyrics_required and not lyrics_available:
+                continue
             lyrics = max(0.0, min(1.0, lyrics_scores.get(song.id, 0.0)))
 
             has_audio_targets = any(target is not None for target in [
@@ -300,7 +303,10 @@ class HybridRetriever:
                 "tempo": tempo_applies,
                 "genre": bool(intent.genres),
                 "artist": intent.artist_reference is not None,
-                "lyrics": lyrics_channel_active,
+                # Missing lyrics are unknown, not a zero-quality match. For an
+                # explicit lyrical request they were filtered above; otherwise
+                # this evidence participates only when it actually exists.
+                "lyrics": lyrics_channel_active and lyrics_available,
             }
             fit_score = self._normalized_weighted_score(active, applicable)
             # Existing v2 catalog vectors contain titles. Until the sound-only
