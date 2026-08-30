@@ -88,9 +88,11 @@ function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove 
   onPlay: () => void; onExpand: () => void; onRemove: () => void;
 }) {
   const breakdownLabels: Record<string, string> = { semantic: "Sound meaning", mood: "Mood", context: "Setting", tempo: "Tempo", genre: "Genre", audio: "Audio profile", popularity: "Catalog confidence", lyrics: "Lyrical meaning" };
-  const visibleBreakdown = Object.entries(item.breakdown).filter(([key]) => key !== "lyrics" || item.song.lyrics_evidence === "analyzed");
+  const visibleBreakdown = Object.entries(item.breakdown).filter(
+    ([key, value]) => key !== "lyrics" || (item.song.lyrics_evidence === "analyzed" && value > 0),
+  );
   const lyricsEvidence = {
-    analyzed: { label: "Lyrics analyzed", detail: "Lyrical meaning can contribute when your request calls for it." },
+    analyzed: { label: "Lyrics analyzed", detail: "Verified lyrical evidence is stored for controlled matching tests." },
     unavailable: { label: "Lyrics unavailable", detail: "This result is based on sound and metadata; missing lyrics are not treated as a bad match." },
     not_analyzed: { label: "Lyrics not yet analyzed", detail: "This result is based on sound and metadata only." },
   }[item.song.lyrics_evidence];
