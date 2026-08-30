@@ -18,6 +18,7 @@ export type Song = {
   valence: number | null;
   acousticness: number | null;
   instrumentalness: number | null;
+  lyrics_evidence: "analyzed" | "unavailable" | "not_analyzed";
 };
 
 export type Intent = {

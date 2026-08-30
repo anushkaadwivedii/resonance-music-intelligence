@@ -91,8 +91,16 @@ button { color: inherit; }
 .score-ring span { font: 600 9px "Manrope"; position: relative; }
 .why-button { background: transparent; border: 0; color: #898591; font-size: 10px; cursor: pointer; min-width: 103px; display: flex; align-items: center; justify-content: end; gap: 4px; }
 .track-reason { border-top: 1px solid var(--line); padding: 18px 22px 20px 65px; display: grid; grid-template-columns: 1.2fr 1fr; gap: 35px; background: rgba(17,16,22,.48); }
+.reason-details { display: grid; align-content: start; gap: 13px; }
 .reason-copy { display: flex; gap: 10px; color: #a393eb; }
 .reason-copy p { color: #aaa5b2; font-size: 12px; line-height: 1.6; margin: -2px 0 0; }
+.lyrics-evidence { display: flex; align-items: flex-start; gap: 7px; color: #77727f; padding-left: 27px; }
+.lyrics-evidence svg { flex: 0 0 auto; margin-top: 1px; }
+.lyrics-evidence div { display: grid; gap: 2px; }
+.lyrics-evidence b { color: #938d9d; font-size: 10px; font-weight: 600; }
+.lyrics-evidence span { color: #67636e; font-size: 9px; line-height: 1.45; }
+.lyrics-evidence.analyzed { color: #7eb9a2; }
+.lyrics-evidence.analyzed b { color: #9bcab7; }
 .score-bars { display: grid; gap: 6px; }
 .bar-group { display: grid; grid-template-columns: 50px 1fr 28px; align-items: center; gap: 8px; font-size: 8px; color: #6f6a77; text-transform: uppercase; letter-spacing: .4px; }
 .bar { height: 3px; background: #302d37; border-radius: 4px; overflow: hidden; }

@@ -192,6 +192,13 @@ class PostgresSongRepository:
             valence=record.valence,
             acousticness=record.acousticness,
             instrumentalness=record.instrumentalness,
+            lyrics_evidence=(
+                "analyzed"
+                if record.lyrics_lookup_status == "embedded"
+                else "unavailable"
+                if record.lyrics_lookup_status in {"not_found", "no_lyrics", "ambiguous"}
+                else "not_analyzed"
+            ),
         )
 
 

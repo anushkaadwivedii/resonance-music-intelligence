@@ -1,4 +1,5 @@
 from backend.app.db_models import SongRecord
+from backend.app.repository import PostgresSongRepository
 import httpx
 
 from backend.scripts.embed_lyrics import lookup, lyric_text, match_confidence, representative_ids
@@ -61,3 +62,17 @@ def test_representative_sample_spans_popularity_and_genres():
     assert max(selected_popularities) >= 91
     assert min(selected_popularities) <= 70
     assert selected_genres == {"pop", "rock"}
+
+
+def test_repository_exposes_lyrics_evidence_without_exposing_lyrics():
+    def record(status: str | None) -> SongRecord:
+        return SongRecord(
+            source="test", source_id=f"song-{status}", title="Example Song", artist="Artist",
+            album=None, genres=[], moods=[], contexts=[], bpm=100, description="test",
+            lyrics_lookup_status=status,
+        )
+
+    assert PostgresSongRepository._to_song(record("embedded")).lyrics_evidence == "analyzed"
+    assert PostgresSongRepository._to_song(record("not_found")).lyrics_evidence == "unavailable"
+    assert PostgresSongRepository._to_song(record("no_lyrics")).lyrics_evidence == "unavailable"
+    assert PostgresSongRepository._to_song(record(None)).lyrics_evidence == "not_analyzed"

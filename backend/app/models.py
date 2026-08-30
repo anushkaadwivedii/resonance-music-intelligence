@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -21,6 +23,7 @@ class Song(BaseModel):
     valence: float | None = None
     acousticness: float | None = None
     instrumentalness: float | None = None
+    lyrics_evidence: Literal["analyzed", "unavailable", "not_analyzed"] = "not_analyzed"
 
 
 class SignalWeights(BaseModel):
