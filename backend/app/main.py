@@ -39,5 +39,12 @@ def recommendations(request: RecommendationRequest) -> RecommendationResponse:
         ) from error
     signals = [*intent.moods, *intent.contexts, *intent.genres]
     focus = ", ".join(signals[:3]) if signals else "the atmosphere you described"
-    summary = f"I found {len(results)} tracks shaped around {focus}. I balanced meaning with tempo, mood, and context so the set feels cohesive without sounding repetitive."
+    if not results and intent.lyrics_required:
+        themes = ", ".join(intent.desired_lyrical_themes[:2]) or "that lyrical theme"
+        summary = (
+            f"I couldn't find a confident match about {themes} in the current lyrics beta. "
+            "The catalog is still limited, so I left the playlist empty instead of guessing."
+        )
+    else:
+        summary = f"I found {len(results)} tracks shaped around {focus}. I balanced meaning with tempo, mood, and context so the set feels cohesive without sounding repetitive."
     return RecommendationResponse(query=request.query, summary=summary, intent=intent, recommendations=results)

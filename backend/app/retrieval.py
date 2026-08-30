@@ -38,6 +38,15 @@ MOOD_SEARCH_DESCRIPTIONS = {
 }
 
 
+def lyrics_min_similarity() -> float:
+    """Configurable beta gate: nearest does not necessarily mean relevant."""
+    try:
+        configured = float(os.getenv("LYRICS_MIN_SIMILARITY", "0.45"))
+    except ValueError:
+        configured = 0.45
+    return max(0.0, min(1.0, configured))
+
+
 def tokenize(text: str) -> list[str]:
     return [word for word in re.findall(r"[a-z0-9]+", text.lower()) if word not in STOP_WORDS]
 
@@ -199,7 +208,8 @@ class HybridRetriever:
             embedding_query = semantic_query_text(query, intent)
             requested_lyrics_text = lyrics_query_text(intent)
             lyrics_channel_active = bool(
-                requested_lyrics_text
+                intent.lyrics_required
+                and requested_lyrics_text
                 and os.getenv("USE_LYRICS_EMBEDDINGS", "false").lower() == "true"
             )
             embedding_inputs = [embedding_query]
@@ -225,6 +235,8 @@ class HybridRetriever:
                 merged[song.id] = song
                 semantic_scores[song.id] = max(similarity, semantic_scores.get(song.id, 0.0))
             for song, lyrics_similarity, sound_similarity in lyrics_rows:
+                if lyrics_similarity < lyrics_min_similarity():
+                    continue
                 merged[song.id] = song
                 lyrics_scores[song.id] = lyrics_similarity
                 semantic_scores[song.id] = max(sound_similarity, semantic_scores.get(song.id, 0.0))
@@ -321,7 +333,7 @@ class HybridRetriever:
             popularity_weight = priorities.popularity_tiebreak
             ranking_score = (1 - popularity_weight) * fit_score + popularity_weight * popularity
             score_pct = round(fit_score * 100)
-            matched = self._matched_evidence(intent, song, semantic)
+            matched = self._matched_evidence(intent, song, semantic, lyrics if lyrics_available else None)
             candidates.append((ranking_score, Recommendation(
                 song=song,
                 score=score_pct,
@@ -451,10 +463,14 @@ class HybridRetriever:
         )
 
     @staticmethod
-    def _matched_evidence(intent: Intent, song: Song, semantic: float) -> list[str]:
+    def _matched_evidence(
+        intent: Intent, song: Song, semantic: float, lyrics: float | None = None
+    ) -> list[str]:
         matches = [mood for mood in intent.moods if mood in song.moods]
         matches += [context for context in intent.contexts if context in song.contexts]
         matches += [genre for genre in intent.genres if genre in song.genre]
+        if lyrics is not None and lyrics > 0 and intent.desired_lyrical_themes:
+            matches.append(f"lyrics: {intent.desired_lyrical_themes[0]}")
         if intent.bpm_min and song.bpm >= intent.bpm_min:
             matches.append(f"{round(song.bpm)} BPM")
         if intent.bpm_max and song.bpm <= intent.bpm_max:

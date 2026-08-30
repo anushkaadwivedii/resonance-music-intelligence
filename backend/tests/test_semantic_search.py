@@ -32,6 +32,17 @@ class LyricsRequiredIntentParser:
         )
 
 
+class IncidentalLyricsIntentParser:
+    def parse(self, query: str):
+        from backend.app.models import Intent, SignalWeights
+        return Intent(
+            search_description="bright joyful music",
+            desired_lyrical_themes=["celebration"],
+            lyrics_required=False,
+            signal_weights=SignalWeights(semantic=1.0, lyrics=0.4),
+        )
+
+
 class FakeVectorRepository:
     def __init__(self) -> None:
         self.song = Song(
@@ -71,15 +82,24 @@ class FakeVectorRepository:
 class FakeLyricsRepository(FakeVectorRepository):
     def __init__(self) -> None:
         super().__init__()
+        self.lyrics_search_called = False
         self.lyric_song = self.song.model_copy(update={
             "id": "lyrics", "title": "Second Chances", "artist": "Words Artist",
+            "lyrics_evidence": "analyzed",
         })
 
     def search_by_vector(self, query_vector, limit):
         return [(self.song, 0.85), (self.lyric_song, 0.75)]
 
     def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        self.lyrics_search_called = True
         return [(self.lyric_song, 0.8, 0.75)]
+
+
+class WeakLyricsRepository(FakeLyricsRepository):
+    def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        self.lyrics_search_called = True
+        return [(self.lyric_song, 0.33, 0.75)]
 
 
 def test_format_result_shows_explanation_fields():
@@ -222,3 +242,33 @@ def test_explicit_lyrics_request_excludes_unknown_lyrics(monkeypatch):
     assert intent.lyrics_required is True
     assert [item.song.id for item in results] == ["lyrics"]
     assert results[0].breakdown.lyrics == 80
+    assert "lyrics: forgiveness" in results[0].matched_on
+
+
+def test_incidental_lyrics_theme_does_not_activate_beta_channel(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    repository = FakeLyricsRepository()
+    retriever = HybridRetriever(
+        repository,
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=IncidentalLyricsIntentParser,
+    )
+
+    _, results = retriever.recommend("happy music", limit=5)
+
+    assert repository.lyrics_search_called is False
+    assert all(item.breakdown.lyrics == 0 for item in results)
+
+
+def test_explicit_lyrics_request_rejects_weak_nearest_neighbors(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    monkeypatch.setenv("LYRICS_MIN_SIMILARITY", "0.45")
+    retriever = HybridRetriever(
+        WeakLyricsRepository(),
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+    )
+
+    _, results = retriever.recommend("songs about forgiveness", limit=5)
+
+    assert results == []

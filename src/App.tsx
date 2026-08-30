@@ -91,8 +91,11 @@ function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove 
   const visibleBreakdown = Object.entries(item.breakdown).filter(
     ([key, value]) => key !== "lyrics" || (item.song.lyrics_evidence === "analyzed" && value > 0),
   );
+  const lyricsContributed = item.song.lyrics_evidence === "analyzed" && item.breakdown.lyrics > 0;
   const lyricsEvidence = {
-    analyzed: { label: "Lyrics analyzed", detail: "Verified lyrical evidence is stored for controlled matching tests." },
+    analyzed: lyricsContributed
+      ? { label: "Lyrics matched", detail: "Verified lyrical meaning contributed to this recommendation." }
+      : { label: "Lyrics available · not used", detail: "Lyrics did not affect the score for this search." },
     unavailable: { label: "Lyrics unavailable", detail: "This result is based on sound and metadata; missing lyrics are not treated as a bad match." },
     not_analyzed: { label: "Lyrics not yet analyzed", detail: "This result is based on sound and metadata only." },
   }[item.song.lyrics_evidence];
@@ -117,8 +120,8 @@ function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove 
         <div className="track-reason">
           <div className="reason-details">
             <div className="reason-copy"><MessageCircleMore size={17} /><p>{item.explanation}</p></div>
-            <div className={`lyrics-evidence ${item.song.lyrics_evidence}`}>
-              {item.song.lyrics_evidence === "analyzed" ? <Check size={13} /> : <Music2 size={13} />}
+            <div className={`lyrics-evidence ${lyricsContributed ? "matched" : item.song.lyrics_evidence}`}>
+              {lyricsContributed ? <Check size={13} /> : <Music2 size={13} />}
               <div><b>{lyricsEvidence.label}</b><span>{lyricsEvidence.detail}</span></div>
             </div>
           </div>
@@ -144,6 +147,7 @@ export default function App() {
   const [saved, setSaved] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const hasResults = playlist.length > 0;
+  const hasSearched = data.query.length > 0;
   const averageFit = useMemo(() => hasResults ? Math.round(playlist.reduce((sum, item) => sum + item.score, 0) / playlist.length) : 0, [playlist, hasResults]);
 
   const runQuery = async (value: string) => {
@@ -185,17 +189,17 @@ export default function App() {
           </button>
         </form>
         {error && <div className="error-message">{error} Make sure the API is running on port 8000.</div>}
-        {!hasResults && <div className="prompt-suggestions">{prompts.map((prompt) => <button key={prompt} onClick={() => choosePrompt(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div>}
+        {!hasSearched && <div className="prompt-suggestions">{prompts.map((prompt) => <button key={prompt} onClick={() => choosePrompt(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div>}
       </section>
 
-      {hasResults && (
+      {hasSearched && (
         <section className="results" id="playlist">
           <div className="conversation-card">
             <div className="ai-avatar"><Sparkles size={18} /></div>
             <div><span className="ai-name">RESONANCE</span><p>{data.summary}</p><IntentPills intent={data.intent} /></div>
           </div>
 
-          <div className="playlist-header">
+          {hasResults ? <><div className="playlist-header">
             <div><span className="section-kicker"><Disc3 size={14} /> YOUR PLAYLIST</span><h2>A soundtrack for right now</h2><p>{playlist.length} tracks · about {playlist.length * 4} min · {averageFit}% average fit</p></div>
             <div className="playlist-actions">
               <button className="secondary-button" onClick={() => { setQuery(data.query); inputRef.current?.focus(); }}><Sparkles size={15} /> Refine</button>
@@ -207,6 +211,14 @@ export default function App() {
             {playlist.map((item, index) => <TrackCard key={item.song.id} item={item} index={index} playing={playing === item.song.id} expanded={expanded === item.song.id} onPlay={() => setPlaying(playing === item.song.id ? null : item.song.id)} onExpand={() => setExpanded(expanded === item.song.id ? null : item.song.id)} onRemove={() => setPlaylist((current) => current.filter((track) => track.song.id !== item.song.id))} />)}
           </div>
           <button className="add-more" onClick={() => { inputRef.current?.focus(); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Plus size={16} /> Describe what to add</button>
+          </> : (
+            <div className="no-results">
+              <Music2 size={22} />
+              <h2>No confident matches yet</h2>
+              <p>Try a broader lyrical theme, or describe the sound and mood you want.</p>
+              <button onClick={() => { setQuery(data.query); inputRef.current?.focus(); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Refine your request</button>
+            </div>
+          )}
         </section>
       )}
 
