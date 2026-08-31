@@ -61,6 +61,8 @@ export type Recommendation = {
   explanation: string;
   matched_on: string[];
   breakdown: Record<"semantic" | "mood" | "context" | "tempo" | "genre" | "audio" | "popularity" | "lyrics", number>;
+  lyrics_verified: boolean;
+  lyrics_verification_reason: string | null;
 };
 
 export type RecommendationResponse = {
@@ -69,3 +71,5 @@ export type RecommendationResponse = {
   intent: Intent;
   recommendations: Recommendation[];
 };
+
+export type MatchFocus = "sound" | "balanced" | "lyrics";

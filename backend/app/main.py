@@ -31,8 +31,8 @@ def songs(limit: int = 100) -> list[Song]:
 @app.post("/api/recommendations", response_model=RecommendationResponse)
 def recommendations(request: RecommendationRequest) -> RecommendationResponse:
     try:
-        intent, results = retriever.recommend(request.query, request.limit)
-    except OpenAIError as error:
+        intent, results = retriever.recommend(request.query, request.limit, request.focus)
+    except (OpenAIError, RuntimeError) as error:
         raise HTTPException(
             status_code=503,
             detail="The semantic search provider is temporarily unavailable.",
@@ -44,6 +44,16 @@ def recommendations(request: RecommendationRequest) -> RecommendationResponse:
         summary = (
             f"I couldn't find a confident match about {themes} in the current lyrics beta. "
             "The catalog is still limited, so I left the playlist empty instead of guessing."
+        )
+    elif request.focus == "lyrics" and any(item.lyrics_verified for item in results):
+        summary = (
+            f"I found {len(results)} lyrical candidates whose stored meaning records agree with your request. "
+            "Embeddings found the candidates; a separate narrative check removed merely adjacent themes."
+        )
+    elif request.focus == "lyrics":
+        summary = (
+            f"I found {len(results)} passage-level lyrical candidates. "
+            "They are ranked by semantic similarity, which is useful evidence but not a verified interpretation."
         )
     else:
         summary = f"I found {len(results)} tracks shaped around {focus}. I balanced meaning with tempo, mood, and context so the set feels cohesive without sounding repetitive."

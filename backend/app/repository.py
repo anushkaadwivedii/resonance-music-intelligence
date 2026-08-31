@@ -19,7 +19,7 @@ from .embeddings import (
     SOUND_EMBEDDING_TEXT_VERSION,
     configured_embedding_model,
 )
-from .models import Intent, Song
+from .models import Intent, LyricsMeaning, Song
 
 
 class SongRepository(Protocol):
@@ -268,6 +268,11 @@ class PostgresSongRepository:
                 else "unavailable"
                 if record.lyrics_lookup_status in {"not_found", "no_lyrics", "ambiguous"}
                 else "not_analyzed"
+            ),
+            lyrics_meaning=(
+                LyricsMeaning.model_validate(record.lyrics_meaning)
+                if record.lyrics_meaning
+                else None
             ),
         )
 

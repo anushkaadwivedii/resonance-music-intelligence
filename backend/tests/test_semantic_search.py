@@ -1,9 +1,10 @@
 import pytest
 
 from backend.app.embeddings import EmbeddingBatch
-from backend.app.models import Song
+from backend.app.models import LyricsMeaning, Song
+from backend.app.lyrics_analysis import CandidateVerdict
 from backend.app.repository import blended_lyrics_similarity
-from backend.app.retrieval import HybridRetriever, lyrics_query_text
+from backend.app.retrieval import HybridRetriever, calibrated_lyrics_scores, lyrics_query_text
 from backend.scripts.search_songs import SemanticSearchResult, format_result
 
 
@@ -104,6 +105,66 @@ class WeakLyricsRepository(FakeLyricsRepository):
     def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
         self.lyrics_search_called = True
         return [(self.lyric_song, 0.33, 0.75)]
+
+
+class ManyLyricsRepository(FakeLyricsRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lyric_songs = [
+            self.lyric_song.model_copy(update={
+                "id": f"lyrics-{index}",
+                "title": f"Candidate {index}",
+                "artist": f"Artist {index}",
+            })
+            for index in range(5)
+        ]
+
+    def search_by_vector(self, query_vector, limit):
+        return []
+
+    def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        self.lyrics_search_called = True
+        return [
+            (song, 0.80 - index * 0.01, 0.70)
+            for index, song in enumerate(self.lyric_songs)
+        ]
+
+
+class SparseMeaningRepository(ManyLyricsRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        meaning = LyricsMeaning(summary="The narrator offers forgiveness and another chance.")
+        self.lyric_songs = [
+            self.lyric_song.model_copy(update={
+                "id": f"candidate-{index}",
+                "title": f"Candidate {index}",
+                "lyrics_meaning": meaning if index >= 12 else None,
+            })
+            for index in range(15)
+        ]
+
+    def search_by_lyrics(self, lyrics_vector, sound_vector, limit):
+        return [
+            (song, 0.80 - index * 0.001, 0.70)
+            for index, song in enumerate(self.lyric_songs)
+        ]
+
+
+class CapturingLyricsVerifier:
+    def __init__(self) -> None:
+        self.song_ids: list[str] = []
+
+    def verify(self, request, songs):
+        self.song_ids = [song.id for song in songs]
+        return {
+            song.id: CandidateVerdict(
+                song_id=song.id,
+                verdict="match",
+                confidence=0.9,
+                reason="The stored meaning supports the request.",
+            )
+            for song in songs
+        }
 
 
 def test_format_result_shows_explanation_fields():
@@ -259,7 +320,7 @@ def test_explicit_lyrics_request_excludes_unknown_lyrics(monkeypatch):
     assert intent.lyrics_required is True
     assert [item.song.id for item in results] == ["lyrics"]
     assert results[0].breakdown.lyrics == 80
-    assert "lyrics: forgiveness" in results[0].matched_on
+    assert "lyrical similarity" in results[0].matched_on
 
 
 def test_incidental_lyrics_theme_does_not_activate_beta_channel(monkeypatch):
@@ -291,9 +352,148 @@ def test_explicit_lyrics_request_rejects_weak_nearest_neighbors(monkeypatch):
     assert results == []
 
 
+def test_lyrics_candidates_must_stay_close_to_the_querys_best_match(monkeypatch):
+    monkeypatch.setenv("LYRICS_MIN_SIMILARITY", "0.45")
+    monkeypatch.setenv("LYRICS_RELATIVE_MARGIN", "0.05")
+
+    retained = calibrated_lyrics_scores({"best": 0.52, "near": 0.48, "weak": 0.46})
+
+    assert retained == {"best": 0.52, "near": 0.48}
+
+
+def test_lyrics_focus_does_not_pad_the_playlist_to_the_requested_limit(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    monkeypatch.setenv("LYRICS_RESULT_LIMIT", "3")
+    retriever = HybridRetriever(
+        ManyLyricsRepository(),
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+    )
+
+    _, results = retriever.recommend("songs about forgiveness", limit=5, focus="lyrics")
+
+    assert len(results) == 3
+
+
 def test_chunk_similarity_is_tempered_by_whole_song_meaning(monkeypatch):
     monkeypatch.setenv("LYRICS_CHUNK_WEIGHT", "0.65")
 
     score = blended_lyrics_similarity(chunk_similarity=0.70, whole_song_similarity=0.30)
 
     assert score == pytest.approx(0.56)
+
+
+def test_sound_focus_never_activates_lyrics_channel(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    repository = FakeLyricsRepository()
+    retriever = HybridRetriever(
+        repository,
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+    )
+
+    _, results = retriever.recommend("songs about forgiveness", limit=5, focus="sound")
+
+    assert repository.lyrics_search_called is False
+    assert all(item.breakdown.lyrics == 0 for item in results)
+
+
+def test_lyrics_focus_forces_lyrics_for_an_ordinary_prompt(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    repository = FakeLyricsRepository()
+    retriever = HybridRetriever(
+        repository,
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=FakeIntentParser,
+    )
+
+    intent, results = retriever.recommend("happy", limit=5, focus="lyrics")
+
+    assert intent.lyrics_required is True
+    assert intent.lyrics_search_description == "happy"
+    assert repository.lyrics_search_called is True
+    assert [item.song.id for item in results] == ["lyrics"]
+    assert results[0].score == 80
+
+
+def test_lyrics_focus_preserves_exact_user_narrative_over_parser_summary():
+    from backend.app.models import Intent
+
+    query = "intense forbidden attraction and desire"
+    intent = Intent(
+        lyrics_search_description="forbidden love",
+        desired_lyrical_themes=["forbidden love"],
+    )
+
+    focused = HybridRetriever._apply_focus(intent, query, "lyrics")
+
+    assert focused.lyrics_search_description == query
+
+
+def test_balanced_focus_averages_sound_and_lyrics_fit(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    retriever = HybridRetriever(
+        FakeLyricsRepository(),
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+    )
+
+    _, results = retriever.recommend("songs about forgiveness", limit=5, focus="balanced")
+
+    # The fake lyrical song has 0.75 sound similarity and 0.80 lyric similarity.
+    assert results[0].score == 78
+
+
+def test_narrative_verification_rejects_adjacent_themes_and_reranks_matches():
+    scores, reasons = HybridRetriever._verified_lyrics_scores(
+        {"exact": 0.48, "adjacent": 0.55, "partial": 0.50},
+        {
+            "exact": CandidateVerdict(
+                song_id="exact", verdict="match", confidence=0.90,
+                reason="The relationship is explicitly constrained and mutually desired.",
+            ),
+            "adjacent": CandidateVerdict(
+                song_id="adjacent", verdict="no_match", confidence=0.95,
+                reason="The song describes attraction but no forbidden relationship.",
+            ),
+            "partial": CandidateVerdict(
+                song_id="partial", verdict="partial", confidence=0.70,
+                reason="Desire is present, but the barrier is not established.",
+            ),
+        },
+    )
+
+    assert "adjacent" not in scores
+    assert "partial" not in scores
+    assert reasons["exact"].startswith("The relationship")
+
+
+def test_narrative_verification_requires_a_verdict_for_every_retained_song():
+    scores, _ = HybridRetriever._verified_lyrics_scores(
+        {"judged": 0.50, "unjudged": 0.60},
+        {
+            "judged": CandidateVerdict(
+                song_id="judged", verdict="match", confidence=0.80,
+                reason="The requested situation is present.",
+            ),
+        },
+    )
+
+    assert set(scores) == {"judged"}
+
+
+def test_verifier_limit_is_applied_after_filtering_for_meaning_records(monkeypatch):
+    monkeypatch.setenv("USE_LYRICS_EMBEDDINGS", "true")
+    monkeypatch.setenv("LYRICS_VERIFIER_CANDIDATES", "2")
+    verifier = CapturingLyricsVerifier()
+    retriever = HybridRetriever(
+        SparseMeaningRepository(),
+        embedding_provider_factory=FakeEmbeddingProvider,
+        intent_parser_factory=LyricsRequiredIntentParser,
+        lyrics_verifier_factory=lambda: verifier,
+    )
+
+    _, results = retriever.recommend("songs about forgiveness", limit=5, focus="lyrics")
+
+    assert verifier.song_ids == ["candidate-12", "candidate-13"]
+    assert {result.song.id for result in results} == {"candidate-12", "candidate-13"}

@@ -4,9 +4,11 @@ import os
 import re
 from collections import Counter
 from collections.abc import Callable
+from typing import Literal
 
 from .embeddings import EmbeddingProvider, OpenAIEmbeddingProvider
 from .intent_parser import IntentParser, OpenAIIntentParser
+from .lyrics_analysis import CandidateVerdict, LyricsVerifier, OpenAILyricsVerifier
 from .models import Intent, Recommendation, ScoreBreakdown, Song
 from .repository import SongRepository, repository
 
@@ -45,6 +47,42 @@ def lyrics_min_similarity() -> float:
     except ValueError:
         configured = 0.45
     return max(0.0, min(1.0, configured))
+
+
+def lyrics_relative_margin() -> float:
+    """Keep candidates reasonably close to the best match for this query."""
+    try:
+        configured = float(os.getenv("LYRICS_RELATIVE_MARGIN", "0.05"))
+    except ValueError:
+        configured = 0.05
+    return max(0.0, min(0.25, configured))
+
+
+def lyrics_result_limit() -> int:
+    """Avoid padding an experimental lyrics result set with weak neighbors."""
+    try:
+        configured = int(os.getenv("LYRICS_RESULT_LIMIT", "12"))
+    except ValueError:
+        configured = 12
+    return max(1, min(30, configured))
+
+
+def lyrics_verifier_candidate_limit() -> int:
+    """Bound verifier output size, latency, and per-search cost."""
+    try:
+        configured = int(os.getenv("LYRICS_VERIFIER_CANDIDATES", "12"))
+    except ValueError:
+        configured = 12
+    return max(1, min(20, configured))
+
+
+def calibrated_lyrics_scores(scores: dict[str, float]) -> dict[str, float]:
+    """Apply both an absolute beta gate and a query-relative quality floor."""
+    if not scores:
+        return {}
+    best = max(scores.values())
+    floor = max(lyrics_min_similarity(), best - lyrics_relative_margin())
+    return {song_id: score for song_id, score in scores.items() if score >= floor}
 
 
 def tokenize(text: str) -> list[str]:
@@ -195,21 +233,30 @@ class HybridRetriever:
         song_repository: SongRepository = repository,
         embedding_provider_factory: Callable[[], EmbeddingProvider] | None = None,
         intent_parser_factory: Callable[[], IntentParser] | None = None,
+        lyrics_verifier_factory: Callable[[], LyricsVerifier] | None = None,
     ) -> None:
         self.repository = song_repository
         self.embedding_provider_factory = embedding_provider_factory
         self.intent_parser_factory = intent_parser_factory
+        self.lyrics_verifier_factory = lyrics_verifier_factory
         self.embedder = HashingEmbedder()
         self.song_vectors: dict[str, list[float]] = {}
 
-    def recommend(self, query: str, limit: int = 7) -> tuple[Intent, list[Recommendation]]:
+    def recommend(
+        self,
+        query: str,
+        limit: int = 7,
+        focus: Literal["auto", "sound", "balanced", "lyrics"] = "auto",
+    ) -> tuple[Intent, list[Recommendation]]:
         if self.embedding_provider_factory is not None:
             # This is the live, billable path: one short query embedding per search.
             intent = self._understand(query)
+            intent = self._apply_focus(intent, query, focus)
             embedding_query = semantic_query_text(query, intent)
             requested_lyrics_text = lyrics_query_text(intent)
             lyrics_channel_active = bool(
-                intent.lyrics_required
+                focus != "sound"
+                and intent.lyrics_required
                 and requested_lyrics_text
                 and os.getenv("USE_LYRICS_EMBEDDINGS", "false").lower() == "true"
             )
@@ -241,6 +288,28 @@ class HybridRetriever:
                 merged[song.id] = song
                 lyrics_scores[song.id] = lyrics_similarity
                 semantic_scores[song.id] = max(sound_similarity, semantic_scores.get(song.id, 0.0))
+            lyrics_scores = calibrated_lyrics_scores(lyrics_scores)
+            verification_reasons: dict[str, str] = {}
+            verified_lyrics_ids: set[str] = set()
+            if lyrics_scores and self.lyrics_verifier_factory is not None and requested_lyrics_text:
+                verifier_ids = sorted(
+                    (
+                        song_id
+                        for song_id in lyrics_scores
+                        if merged[song_id].lyrics_meaning is not None
+                    ),
+                    key=lyrics_scores.__getitem__,
+                    reverse=True,
+                )[:lyrics_verifier_candidate_limit()]
+                verifiable_songs = [merged[song_id] for song_id in verifier_ids]
+                verdicts = self.lyrics_verifier_factory().verify(
+                    intent.lyrics_search_description or requested_lyrics_text,
+                    verifiable_songs,
+                )
+                lyrics_scores, verification_reasons = self._verified_lyrics_scores(
+                    lyrics_scores, verdicts
+                )
+                verified_lyrics_ids = set(lyrics_scores)
             songs = list(merged.values())
         else:
             # Deterministic and free: used by unit tests and offline experiments.
@@ -251,6 +320,8 @@ class HybridRetriever:
             semantic_scores = {}
             lyrics_scores = {}
             lyrics_channel_active = False
+            verification_reasons = {}
+            verified_lyrics_ids = set()
 
         candidates = []
         seen_recordings: set[tuple[str, str]] = set()
@@ -321,7 +392,20 @@ class HybridRetriever:
                 # this evidence participates only when it actually exists.
                 "lyrics": lyrics_channel_active and lyrics_available,
             }
-            fit_score = self._normalized_weighted_score(active, applicable)
+            sound_applicable = {**applicable, "lyrics": False}
+            sound_fit = self._normalized_weighted_score(active, sound_applicable)
+            if focus == "lyrics":
+                fit_score = lyrics
+            elif focus == "balanced" and lyrics_channel_active and lyrics_available:
+                fit_score = (sound_fit + lyrics) / 2
+            else:
+                # Automatic mode retains LLM-selected priorities; Sound mode
+                # deliberately excludes lyrics even if the prompt mentions them.
+                fit_score = (
+                    self._normalized_weighted_score(active, applicable)
+                    if focus == "auto"
+                    else sound_fit
+                )
             # Existing v2 catalog vectors contain titles. Until the sound-only
             # vectors are rebuilt, cancel their most visible failure mode:
             # literal query/title overlap is not positive evidence unless the
@@ -334,7 +418,14 @@ class HybridRetriever:
             popularity_weight = priorities.popularity_tiebreak
             ranking_score = (1 - popularity_weight) * fit_score + popularity_weight * popularity
             score_pct = round(fit_score * 100)
-            matched = self._matched_evidence(intent, song, semantic, lyrics if lyrics_available else None)
+            lyrics_verified = song.id in verified_lyrics_ids
+            matched = self._matched_evidence(
+                intent,
+                song,
+                semantic,
+                lyrics if lyrics_available else None,
+                lyrics_verified=lyrics_verified,
+            )
             candidates.append((ranking_score, Recommendation(
                 song=song,
                 score=score_pct,
@@ -347,10 +438,38 @@ class HybridRetriever:
                     popularity=round(popularity * 100),
                     lyrics=round(lyrics * 100),
                 ),
+                lyrics_verified=lyrics_verified,
+                lyrics_verification_reason=verification_reasons.get(song.id),
             )))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        return intent, self._select_diverse(candidates, limit)
+        selection_limit = (
+            min(limit, lyrics_result_limit())
+            if focus == "lyrics" and lyrics_channel_active
+            else limit
+        )
+        return intent, self._select_diverse(candidates, selection_limit)
+
+    @staticmethod
+    def _verified_lyrics_scores(
+        embedding_scores: dict[str, float],
+        verdicts: dict[str, CandidateVerdict],
+    ) -> tuple[dict[str, float], dict[str, str]]:
+        """Gate semantic neighbors on narrative agreement, then rerank them."""
+        scores: dict[str, float] = {}
+        reasons: dict[str, str] = {}
+        for song_id, embedding_score in embedding_scores.items():
+            verdict = verdicts.get(song_id)
+            # A partial match is still missing a defining requirement. Keep it
+            # out of a lyrics-only result rather than presenting adjacency as fit.
+            if verdict is None or verdict.verdict != "match":
+                continue
+            if verdict.confidence < 0.70:
+                continue
+            verification_score = verdict.confidence
+            scores[song_id] = 0.40 * embedding_score + 0.60 * verification_score
+            reasons[song_id] = verdict.reason
+        return scores, reasons
 
     @staticmethod
     def _select_diverse(candidates: list[tuple[float, Recommendation]], limit: int) -> list[Recommendation]:
@@ -383,6 +502,32 @@ class HybridRetriever:
             import logging
             logging.getLogger(__name__).exception("LLM intent parsing failed; using deterministic fallback")
             return parse_intent(query)
+
+    @staticmethod
+    def _apply_focus(
+        intent: Intent,
+        query: str,
+        focus: Literal["auto", "sound", "balanced", "lyrics"],
+    ) -> Intent:
+        if focus == "auto":
+            return intent
+        if focus == "sound":
+            return intent.model_copy(update={"lyrics_required": False})
+
+        # An explicit UI choice is stronger than an inference from wording. In
+        # Lyrics mode, preserve the user's exact narrative: even a reasonable
+        # LLM paraphrase can collapse "intense forbidden attraction and desire"
+        # into the much broader "forbidden love" and damage retrieval.
+        lyrics_description = (
+            query
+            if focus == "lyrics"
+            else intent.lyrics_search_description or query
+        )
+        return intent.model_copy(update={
+            "lyrics_required": True,
+            "lyrics_search_description": lyrics_description,
+            "desired_lyrical_themes": intent.desired_lyrical_themes or [query],
+        })
 
     @staticmethod
     def _overlap(wanted: list[str], actual: list[str]) -> float:
@@ -465,13 +610,17 @@ class HybridRetriever:
 
     @staticmethod
     def _matched_evidence(
-        intent: Intent, song: Song, semantic: float, lyrics: float | None = None
+        intent: Intent,
+        song: Song,
+        semantic: float,
+        lyrics: float | None = None,
+        lyrics_verified: bool = False,
     ) -> list[str]:
         matches = [mood for mood in intent.moods if mood in song.moods]
         matches += [context for context in intent.contexts if context in song.contexts]
         matches += [genre for genre in intent.genres if genre in song.genre]
         if lyrics is not None and lyrics > 0 and intent.desired_lyrical_themes:
-            matches.append(f"lyrics: {intent.desired_lyrical_themes[0]}")
+            matches.append("verified lyrical meaning" if lyrics_verified else "lyrical similarity")
         if intent.bpm_min and song.bpm >= intent.bpm_min:
             matches.append(f"{round(song.bpm)} BPM")
         if intent.bpm_max and song.bpm <= intent.bpm_max:
@@ -492,4 +641,13 @@ class HybridRetriever:
 
 provider_factory = OpenAIEmbeddingProvider if os.getenv("AI_PROVIDER", "openai").lower() == "openai" else None
 intent_factory = OpenAIIntentParser if os.getenv("INTENT_PROVIDER", "rules").lower() == "openai" else None
-retriever = HybridRetriever(embedding_provider_factory=provider_factory, intent_parser_factory=intent_factory)
+verifier_factory = (
+    OpenAILyricsVerifier
+    if os.getenv("USE_LYRICS_VERIFIER", "false").lower() == "true"
+    else None
+)
+retriever = HybridRetriever(
+    embedding_provider_factory=provider_factory,
+    intent_parser_factory=intent_factory,
+    lyrics_verifier_factory=verifier_factory,
+)

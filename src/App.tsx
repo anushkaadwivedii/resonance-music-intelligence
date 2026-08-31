@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   MessageCircleMore,
   Music2,
-  Pause,
   Play,
   Plus,
   Send,
@@ -19,7 +18,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { Intent, Recommendation, RecommendationResponse } from "./types";
+import type { Intent, MatchFocus, Recommendation, RecommendationResponse } from "./types";
 
 const prompts = [
   "Dreamy songs for a rainy late night, but not too slow",
@@ -42,11 +41,11 @@ const initialResponse: RecommendationResponse = {
   recommendations: [],
 };
 
-async function getRecommendations(query: string): Promise<RecommendationResponse> {
+async function getRecommendations(query: string, focus: MatchFocus): Promise<RecommendationResponse> {
   const response = await fetch("/api/recommendations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit: 20 }),
+    body: JSON.stringify({ query, limit: 20, focus }),
   });
   if (!response.ok) throw new Error("The recommendation service could not complete that request.");
   return response.json() as Promise<RecommendationResponse>;
@@ -71,42 +70,58 @@ function IntentPills({ intent }: { intent: Intent }) {
 }
 
 function ScoreRing({ score }: { score: number }) {
-  return <div className="score-ring" style={{ "--score": `${score * 3.6}deg` } as React.CSSProperties}><span>{score}</span></div>;
+  return <div className="score-ring" title="Relative fit score, not a probability" aria-label={`Relative fit score ${score} out of 100`} style={{ "--score": `${score * 3.6}deg` } as React.CSSProperties}><span>{score}</span></div>;
 }
 
-function TrackArt({ item, index, playing }: { item: Recommendation; index: number; playing: boolean }) {
+function spotifySearchUrl(item: Recommendation): string {
+  return `https://open.spotify.com/search/${encodeURIComponent(`${item.song.title} ${item.song.artist}`)}`;
+}
+
+function TrackArt({ item, index }: { item: Recommendation; index: number }) {
   return (
     <div className="track-art" style={{ "--accent": item.song.accent, "--rotation": `${index * 19}deg` } as React.CSSProperties}>
-      <div className={`vinyl ${playing ? "spinning" : ""}`}><span /></div>
+      <div className="vinyl"><span /></div>
       <div className="art-line" />
     </div>
   );
 }
 
-function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove }: {
-  item: Recommendation; index: number; playing: boolean; expanded: boolean;
-  onPlay: () => void; onExpand: () => void; onRemove: () => void;
+function TrackCard({ item, index, expanded, onExpand, onRemove }: {
+  item: Recommendation; index: number; expanded: boolean;
+  onExpand: () => void; onRemove: () => void;
 }) {
-  const breakdownLabels: Record<string, string> = { semantic: "Sound meaning", mood: "Mood", context: "Setting", tempo: "Tempo", genre: "Genre", audio: "Audio profile", popularity: "Catalog confidence", lyrics: "Lyrical meaning" };
+  const breakdownLabels: Record<string, string> = { semantic: "Sound meaning", mood: "Mood", context: "Setting", tempo: "Tempo", genre: "Genre", audio: "Audio profile", popularity: "Catalog confidence", lyrics: "Lyrical similarity" };
   const visibleBreakdown = Object.entries(item.breakdown).filter(
     ([key, value]) => key !== "lyrics" || (item.song.lyrics_evidence === "analyzed" && value > 0),
   );
   const lyricsContributed = item.song.lyrics_evidence === "analyzed" && item.breakdown.lyrics > 0;
-  const lyricsEvidence = {
+  const lyricsEvidence = item.lyrics_verified
+    ? {
+        label: "Lyrical meaning verified",
+        detail: item.lyrics_verification_reason ?? "A narrative check confirmed that the stored lyrical meaning fits this request.",
+      }
+    : ({
     analyzed: lyricsContributed
-      ? { label: "Lyrics matched", detail: "Verified lyrical meaning contributed to this recommendation." }
+      ? { label: "Lyrical similarity used", detail: "Passage-level similarity contributed to this ranking; it is not a verified interpretation." }
       : { label: "Lyrics available · not used", detail: "Lyrics did not affect the score for this search." },
     unavailable: { label: "Lyrics unavailable", detail: "This result is based on sound and metadata; missing lyrics are not treated as a bad match." },
     not_analyzed: { label: "Lyrics not yet analyzed", detail: "This result is based on sound and metadata only." },
-  }[item.song.lyrics_evidence];
+  }[item.song.lyrics_evidence]);
   return (
     <article className={`track-card ${expanded ? "expanded" : ""}`}>
       <div className="track-main">
         <button className="drag-handle" aria-label={`Reorder ${item.song.title}`}><GripVertical size={17} /></button>
-        <TrackArt item={item} index={index} playing={playing} />
-        <button className="play-button" onClick={onPlay} aria-label={playing ? "Pause preview" : "Play preview"}>
-          {playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
-        </button>
+        <TrackArt item={item} index={index} />
+        <a
+          className="play-button"
+          href={spotifySearchUrl(item)}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${item.song.title} by ${item.song.artist} on Spotify`}
+          title="Open on Spotify"
+        >
+          <Play size={15} fill="currentColor" />
+        </a>
         <div className="track-info">
           <div className="track-heading"><h3>{item.song.title}</h3><span>·</span><p>{item.song.artist}</p></div>
           <div className="track-meta"><span>{item.song.genre}</span><span>{Math.round(item.song.bpm)} BPM</span>{item.song.perceived_bpm && <span>≈ {Math.round(item.song.perceived_bpm)} half-time feel</span>}{item.song.year && <span>{item.song.year}</span>}</div>
@@ -121,7 +136,7 @@ function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove 
           <div className="reason-details">
             <div className="reason-copy"><MessageCircleMore size={17} /><p>{item.explanation}</p></div>
             <div className={`lyrics-evidence ${lyricsContributed ? "matched" : item.song.lyrics_evidence}`}>
-              {lyricsContributed ? <Check size={13} /> : <Music2 size={13} />}
+              <Music2 size={13} />
               <div><b>{lyricsEvidence.label}</b><span>{lyricsEvidence.detail}</span></div>
             </div>
           </div>
@@ -138,11 +153,11 @@ function TrackCard({ item, index, playing, expanded, onPlay, onExpand, onRemove 
 
 export default function App() {
   const [query, setQuery] = useState("");
+  const [focus, setFocus] = useState<MatchFocus>("sound");
   const [data, setData] = useState(initialResponse);
   const [playlist, setPlaylist] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [playing, setPlaying] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -155,8 +170,8 @@ export default function App() {
     if (clean.length < 3 || loading) return;
     setLoading(true); setError(""); setSaved(false);
     try {
-      const response = await getRecommendations(clean);
-      setData(response); setPlaylist(response.recommendations); setQuery(""); setExpanded(null); setPlaying(null);
+      const response = await getRecommendations(clean, focus);
+      setData(response); setPlaylist(response.recommendations); setQuery(""); setExpanded(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Something went wrong.");
     } finally { setLoading(false); }
@@ -188,6 +203,24 @@ export default function App() {
             {loading ? <LoaderCircle className="spin" size={19} /> : <Send size={18} />}
           </button>
         </form>
+        <div className="focus-control" aria-label="Choose what the recommendations should match">
+          <span>Match by</span>
+          {([
+            ["sound", "Sound", AudioLines],
+            ["balanced", "Both", Sparkles],
+            ["lyrics", "Lyrics", MessageCircleMore],
+          ] as const).map(([value, label, Icon]) => (
+            <button
+              type="button"
+              key={value}
+              className={focus === value ? "active" : ""}
+              aria-pressed={focus === value}
+              onClick={() => setFocus(value)}
+            >
+              <Icon size={12} /> {label}
+            </button>
+          ))}
+        </div>
         {error && <div className="error-message">{error} Make sure the API is running on port 8000.</div>}
         {!hasSearched && <div className="prompt-suggestions">{prompts.map((prompt) => <button key={prompt} onClick={() => choosePrompt(prompt)}>{prompt}<ArrowRight size={14} /></button>)}</div>}
       </section>
@@ -208,7 +241,7 @@ export default function App() {
           </div>
 
           <div className="track-list">
-            {playlist.map((item, index) => <TrackCard key={item.song.id} item={item} index={index} playing={playing === item.song.id} expanded={expanded === item.song.id} onPlay={() => setPlaying(playing === item.song.id ? null : item.song.id)} onExpand={() => setExpanded(expanded === item.song.id ? null : item.song.id)} onRemove={() => setPlaylist((current) => current.filter((track) => track.song.id !== item.song.id))} />)}
+            {playlist.map((item, index) => <TrackCard key={item.song.id} item={item} index={index} expanded={expanded === item.song.id} onExpand={() => setExpanded(expanded === item.song.id ? null : item.song.id)} onRemove={() => setPlaylist((current) => current.filter((track) => track.song.id !== item.song.id))} />)}
           </div>
           <button className="add-more" onClick={() => { inputRef.current?.focus(); window.scrollTo({ top: 0, behavior: "smooth" }); }}><Plus size={16} /> Describe what to add</button>
           </> : (

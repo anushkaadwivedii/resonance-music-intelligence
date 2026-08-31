@@ -3,6 +3,16 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+class LyricsMeaning(BaseModel):
+    """Copyright-safe, derived meaning used to verify lyrical retrieval."""
+
+    summary: str
+    themes: list[str] = []
+    relationship_dynamics: list[str] = []
+    narrator_perspective: str | None = None
+    emotional_arc: str | None = None
+
+
 class Song(BaseModel):
     id: str
     title: str
@@ -24,6 +34,8 @@ class Song(BaseModel):
     acousticness: float | None = None
     instrumentalness: float | None = None
     lyrics_evidence: Literal["analyzed", "unavailable", "not_analyzed"] = "not_analyzed"
+    # Internal evidence only. It is intentionally omitted from API responses.
+    lyrics_meaning: LyricsMeaning | None = Field(default=None, exclude=True)
 
 
 class SignalWeights(BaseModel):
@@ -81,11 +93,14 @@ class Recommendation(BaseModel):
     explanation: str
     matched_on: list[str]
     breakdown: ScoreBreakdown
+    lyrics_verified: bool = False
+    lyrics_verification_reason: str | None = None
 
 
 class RecommendationRequest(BaseModel):
     query: str = Field(min_length=3, max_length=500)
     limit: int = Field(default=20, ge=1, le=30)
+    focus: Literal["auto", "sound", "balanced", "lyrics"] = "auto"
 
     @field_validator("query")
     @classmethod
