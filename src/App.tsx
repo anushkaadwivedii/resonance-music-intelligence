@@ -15,7 +15,6 @@ import {
   Plus,
   Send,
   Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 import type { Intent, MatchFocus, Recommendation, RecommendationResponse } from "./types";
@@ -190,9 +189,9 @@ export default function App() {
       </nav>
 
       <section className={`hero ${hasResults ? "with-results" : ""}`} id="discover">
-        <div className="eyebrow"><span /><Sparkles size={14} /> CONVERSATIONAL MUSIC INTELLIGENCE <span /></div>
+        <div className="eyebrow"><span /><Sparkles size={14} /> EXPLAINABLE MUSIC DISCOVERY <span /></div>
         <h1>Find the feeling.<br /><em>We'll find the sound.</em></h1>
-        <p className="hero-copy">Describe a moment, a mood, or a memory. Resonance listens between the words to build a playlist that truly fits.</p>
+        <p className="hero-copy">Describe a moment, mood, or memory, then choose whether to match by sound, lyrics, or both.</p>
 
         <form className="prompt-box" onSubmit={submit}>
           <div className="prompt-icon"><Headphones size={20} /></div>

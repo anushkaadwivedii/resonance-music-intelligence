@@ -47,14 +47,17 @@ def recommendations(request: RecommendationRequest) -> RecommendationResponse:
         )
     elif request.focus == "lyrics" and any(item.lyrics_verified for item in results):
         summary = (
-            f"I found {len(results)} lyrical candidates whose stored meaning records agree with your request. "
-            "Embeddings found the candidates; a separate narrative check removed merely adjacent themes."
+            f"Found {len(results)} lyric matches. Vector search retrieved the candidates, "
+            "and a second-stage check confirmed the requested narrative."
         )
     elif request.focus == "lyrics":
         summary = (
-            f"I found {len(results)} passage-level lyrical candidates. "
-            "They are ranked by semantic similarity, which is useful evidence but not a verified interpretation."
+            f"Found {len(results)} passage-level lyric candidates. "
+            "They are ranked by semantic similarity, not a verified interpretation."
         )
     else:
-        summary = f"I found {len(results)} tracks shaped around {focus}. I balanced meaning with tempo, mood, and context so the set feels cohesive without sounding repetitive."
+        summary = (
+            f"Found {len(results)} tracks matching {focus}. "
+            "The ranking combines semantic similarity with relevant tempo, mood, and context signals."
+        )
     return RecommendationResponse(query=request.query, summary=summary, intent=intent, recommendations=results)

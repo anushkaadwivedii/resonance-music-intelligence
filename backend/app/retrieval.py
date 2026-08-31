@@ -631,12 +631,12 @@ class HybridRetriever:
 
     @staticmethod
     def _explain(song: Song, intent: Intent, matched: list[str]) -> str:
-        lead = f"Its {song.description}."
+        lead = f"{song.description.rstrip('.')}."
         if matched:
-            return f"{lead} It connects to your request through {', '.join(matched)}."
+            return f"{lead} Match signals: {', '.join(matched)}."
         if intent.excluded_genres:
-            return f"{lead} It also stays outside the excluded {', '.join(intent.excluded_genres)} sound."
-        return f"{lead} The overall tone is a strong semantic fit for the feeling you described."
+            return f"{lead} Excluded genres: {', '.join(intent.excluded_genres)}."
+        return f"{lead} The sound profile is semantically similar to the request."
 
 
 provider_factory = OpenAIEmbeddingProvider if os.getenv("AI_PROVIDER", "openai").lower() == "openai" else None
